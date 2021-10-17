@@ -137,7 +137,7 @@ func searchNamesList(search string) (cp []CodePoint, err error) {
 			schr = parts[0]
 			desc = desc[0:0]
 		}
-		desc = append(desc, parts[1])
+		desc = append(desc, strings.ToLower(parts[1]))
 	}
 	matcher(desc)
 	return cp, nil
