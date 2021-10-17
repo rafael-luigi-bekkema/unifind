@@ -52,9 +52,18 @@ func fetchUnicodeURL(url string) (io.ReadCloser, error) {
 	return f, nil
 }
 
+type Category struct {
+	Name        string
+	Start, End  string
+	Description string
+}
+
 type CodePoint struct {
-	Chr  rune
-	Desc string
+	Chr         rune
+	Desc        string
+	FullDesc    []string
+	Category    Category
+	Subcategory string
 }
 
 func errorf(format string, args ...interface{}) {
@@ -79,7 +88,7 @@ func searchIndex(search string) (cp []CodePoint, err error) {
 			if err != nil {
 				errorf("invalid rune %q: %s", parts[1], err)
 			}
-			cp = append(cp, CodePoint{rune(chr), parts[0]})
+			cp = append(cp, CodePoint{rune(chr), parts[0], nil, Category{}, ""})
 		}
 	}
 	return cp, nil
@@ -105,14 +114,16 @@ func matchAll(target []string, query string) bool {
 func searchNamesList(search string) (cp []CodePoint, err error) {
 	search = strings.ToLower(search)
 	var schr string
+	var ccat Category
+	var cscat string
 	matcher := func(desc []string) {
-		if matchAll(desc, search) {
+		if matchAll(desc, search) || matchAll([]string{strings.ToLower(ccat.Name), strings.ToLower(cscat)}, search) {
 			i, err := strconv.ParseInt(schr, 16, 32)
 			if err != nil {
 				errorf("invalid rune %q: %s", schr, err)
 				return
 			}
-			cp = append(cp, CodePoint{rune(i), strings.Join(desc, " ")})
+			cp = append(cp, CodePoint{rune(i), desc[0], desc, ccat, cscat})
 		}
 	}
 	f, err := fetchUnicodeURL(unicodeNamesList)
@@ -122,8 +133,23 @@ func searchNamesList(search string) (cp []CodePoint, err error) {
 	defer f.Close()
 	rdr := bufio.NewScanner(f)
 	desc := make([]string, 0, 5)
+	var category Category
+	var subcategory string
 	for rdr.Scan() {
 		line := rdr.Text()
+		if strings.HasPrefix(line, "@\t\t") {
+			subcategory = line[3:]
+			continue
+		}
+		if strings.HasPrefix(line, "@@\t") {
+			parts := strings.Split(line, "\t")
+			category = Category{Name: parts[2], Start: parts[1], End: parts[3]}
+			continue
+		}
+		if strings.HasPrefix(line, "@+\t\t") {
+			category.Description = line[4:]
+			continue
+		}
 		if strings.HasPrefix(line, ";") || strings.HasPrefix(line, "@") || strings.HasPrefix(line, "\t\t") {
 			continue
 		}
@@ -136,6 +162,8 @@ func searchNamesList(search string) (cp []CodePoint, err error) {
 			matcher(desc)
 			schr = parts[0]
 			desc = desc[0:0]
+			ccat = category
+			cscat = subcategory
 		}
 		desc = append(desc, strings.ToLower(parts[1]))
 	}
@@ -144,14 +172,31 @@ func searchNamesList(search string) (cp []CodePoint, err error) {
 }
 
 func run() error {
-	if len(os.Args) < 2 {
+	var args []string
+	flags := make(map[string]bool)
+	for _, arg := range os.Args {
+		if strings.HasPrefix(arg, "-") {
+			flags[strings.TrimLeft(arg, "-")] = true
+			continue
+		}
+		args = append(args, arg)
+	}
+	if len(args) < 2 {
 		return fmt.Errorf("provide a search term")
 	}
-	cp, err := searchNamesList(strings.Join(os.Args[1:], " "))
+	cp, err := searchNamesList(strings.Join(args[1:], " "))
 	if err != nil {
 		return err
 	}
 	for _, c := range cp {
+		if flags["v"] {
+			fmt.Printf("%c %s (%v :: %s)\n", c.Chr, c.Desc, c.Category, c.Subcategory)
+			continue
+		}
+		if flags["q"] {
+			fmt.Printf("%c\n", c.Chr)
+			continue
+		}
 		fmt.Printf("%c %s\n", c.Chr, c.Desc)
 	}
 	if len(cp) == 0 {
