@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -114,13 +115,14 @@ func matchAll(target []string, query string) bool {
 func searchNamesList(search string) (cp []CodePoint, err error) {
 	search = strings.ToLower(search)
 	var schr string
+	var lineNr int
 	var ccat Category
 	var cscat string
 	matcher := func(desc []string) {
-		if matchAll(desc, search) || matchAll([]string{strings.ToLower(ccat.Name), strings.ToLower(cscat)}, search) {
+		if search == "" || matchAll(desc, search) || matchAll([]string{strings.ToLower(ccat.Name), strings.ToLower(cscat)}, search) {
 			i, err := strconv.ParseInt(schr, 16, 32)
 			if err != nil {
-				errorf("invalid rune %q: %s", schr, err)
+				errorf("invalid rune %q: %s (set on line: %d)", schr, err, lineNr)
 				return
 			}
 			cp = append(cp, CodePoint{rune(i), desc[0], desc, ccat, cscat})
@@ -136,6 +138,7 @@ func searchNamesList(search string) (cp []CodePoint, err error) {
 	var category Category
 	var subcategory string
 	for rdr.Scan() {
+		lineNr++
 		line := rdr.Text()
 		if strings.HasPrefix(line, "@\t\t") {
 			subcategory = line[3:]
@@ -153,13 +156,18 @@ func searchNamesList(search string) (cp []CodePoint, err error) {
 		if strings.HasPrefix(line, ";") || strings.HasPrefix(line, "@") || strings.HasPrefix(line, "\t\t") {
 			continue
 		}
+		if excludeCategory(category.Name) {
+			continue
+		}
 		parts := strings.Split(line, "\t")
 		if len(parts) != 2 {
 			errorf("invalid format, expected 2 fields, got %d: %s\n", len(parts), line)
 			continue
 		}
 		if parts[0] != "" {
-			matcher(desc)
+			if schr != "" {
+				matcher(desc)
+			}
 			schr = parts[0]
 			desc = desc[0:0]
 			ccat = category
@@ -169,6 +177,13 @@ func searchNamesList(search string) (cp []CodePoint, err error) {
 	}
 	matcher(desc)
 	return cp, nil
+}
+
+func excludeCategory(group string) bool {
+	if group == "Sutton SignWriting" || group == "Runic" || group == "Coptic" {
+		return true
+	}
+	return false
 }
 
 func run() error {
@@ -181,23 +196,47 @@ func run() error {
 		}
 		args = append(args, arg)
 	}
-	if len(args) < 2 {
-		return fmt.Errorf("provide a search term")
+	var search string
+	if len(args) >= 2 {
+		search = strings.Join(args[1:], " ")
 	}
-	cp, err := searchNamesList(strings.Join(args[1:], " "))
+	cp, err := searchNamesList(search)
 	if err != nil {
 		return err
 	}
+	if flags["cats"] {
+		set := make(map[string]struct{})
+		var cats []string
+		for _, c := range cp {
+			if _, ok := set[c.Category.Name]; ok {
+				continue
+			}
+			set[c.Category.Name] = struct{}{}
+			cats = append(cats, c.Category.Name)
+		}
+		sort.Slice(cats, func(i, j int) bool {
+			return cats[i] < cats[j]
+		})
+		for _, cat := range cats {
+			fmt.Println(cat)
+		}
+		return nil
+	}
 	for _, c := range cp {
+		if flags["c"] {
+			fmt.Printf("%U\n", c.Chr)
+			continue
+		}
 		if flags["v"] {
-			fmt.Printf("%c %s (%v :: %s)\n", c.Chr, c.Desc, c.Category, c.Subcategory)
+			fmt.Printf("%c %s\n", c.Chr, c.Desc)
 			continue
 		}
-		if flags["q"] {
-			fmt.Printf("%c\n", c.Chr)
+		if flags["vv"] {
+			fmt.Printf("%c name=%q category=%q subcategory=%q from=%q to=%q\n",
+				c.Chr, c.Desc, c.Category.Name, c.Subcategory, c.Category.Start, c.Category.End)
 			continue
 		}
-		fmt.Printf("%c %s\n", c.Chr, c.Desc)
+		fmt.Printf("%c\n", c.Chr)
 	}
 	if len(cp) == 0 {
 		return fmt.Errorf("Not found")
